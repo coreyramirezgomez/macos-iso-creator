@@ -1,0 +1,210 @@
+#!/bin/bash
+
+#### Global Variables ####
+DEBUG=0
+VERBOSE=""
+CREATE=0
+OS_NAME=""
+SOURCE=""
+#### Functions ####
+print()
+{
+	local OPTIND
+	if [ "$(uname -s)" == "Darwin" ];then
+		Black='\033[0;30m'        # Black
+		Red='\033[0;31m'          # Red
+		Green='\033[0;32m'        # Green
+		Yellow='\033[0;33m'       # Yellow
+		Blue='\033[0;34m'         # Blue
+		Purple='\033[0;35m'       # Purple
+		Cyan='\033[0;36m'         # Cyan
+		White='\033[0;37m'        # White
+		NC='\033[m'               # Color Reset
+	else 
+		Black='\e[0;30m'        # Black
+		Red='\e[0;31m'          # Red
+		Green='\e[0;32m'        # Green
+		Yellow='\e[0;33m'       # Yellow
+		Blue='\e[0;34m'         # Blue
+		Purple='\e[0;35m'       # Purple
+		Cyan='\e[0;36m'         # Cyan
+		White='\e[0;37m'        # White
+		NC="\e[m"               # Color Reset
+	fi
+	colors=( "$Red" "$Green" "$Gellow" "$Blue" "$Purple" "$Cyan" )
+	local DEBUG=0
+	FGND=""
+	NL=1
+	PNL=0
+	STRING=" "
+	while getopts "f:npKRGYBPCWS:" opt
+	do
+		case "$opt" in
+			"f")					# Set foreground/text color.
+				case "$OPTARG" in
+					"black") FGND="$Black";;
+					"red") FGND="$Red";;
+					"green") FGND="$Green";;
+					"yellow") FGND="$Yellow";;
+					"blue") FGND="$Blue";;
+					"purple") FGND="$Purple";;
+					"cyan") FGND="$Cyan";;
+					"white") FGND="$White";;
+					"*") [ $DEBUG -eq 1 ] && echo "Unrecognized Arguement: $OPTARG" ;;
+				esac
+				;;
+			"n") NL=0 ;;	 			# Print with newline.
+			"p") ((PNL++)) ;; 			# Prepend with newline.
+			"K") FGND="$Black";;
+			"R") FGND="$Red";;
+			"G") FGND="$Green";;
+			"Y") FGND="$Yellow";;
+			"B") FGND="$Blue";;
+			"P") FGND="$Purple";;
+			"C") FGND="$Cyan";;
+			"W") FGND="$White";;
+			"D") local DEBUG=1 ;;
+			"S") STRING="$OPTARG" ;;
+			"*") [ $DEBUG -eq 1 ] && echo "Unknown Arguement: $opt" ;;
+		esac
+	done
+	if [[ "$STRING" == " " ]];then
+		shift "$((OPTIND - 1))"
+		STRING="$@" 
+	fi
+	if [ $DEBUG -eq 1 ]; then
+		echo "FGND: $FGND"
+		echo "NL: $NL"
+		echo "PNL: $PNL"
+		echo "STRING: $STRING"
+	fi
+	while [ $PNL -ne 0 ] 
+	do
+		printf "\n"
+		((PNL--))
+	done
+	[ ! -z $FGND ] && STRING="$FGND$STRING$NC"
+	printf -- "$STRING"
+	[ $NL -eq 1 ] && printf "\n"
+}
+check_source()
+{
+	if [ $# -lt 1 ];then
+		print -R "No source argument detected."
+		exit 1
+	elif [ $DEBUG -eq 1 ];then
+		print -B "Accepted source arugment: $1"
+	fi
+	if [ ! -d "$1" ];then
+		print -R "Could not find source at $1"
+		exit 1
+	elif [ $DEBUG -eq 1 ];then
+		print -B "Found source at $1"
+	fi
+	FILE="$(echo "$1" | rev | cut -d"/" -f1 | rev)"
+	if [[ ! "$FILE" == *".app" ]];then
+		print -R "Not a valid .app source file: $FILE"
+		exit 1
+	elif [ $DEBUG -eq 1 ]; then
+		print -B "Found a valid .app source file: $FILE"
+	fi
+	OS_NAME="$(echo ${FILE%.*} | sed -e "s/Install OS X //g" -e "s/Install macOS //g")"
+	while [ -z "$OS_NAME" ]
+	do
+		print -R "Could not parse OS name ($OS_NAME)"
+		print -R -n "Please enter a name: "
+		read OS_NAME
+		print ""
+	done
+}
+
+create()
+{
+	WORK_DIR="/tmp/$0-$(date +%s)"
+	mkdir -p$VERBOSE "$WORK_DIR"
+	cd "$WORK_DIR"
+	print -B "Working out of $WORK_DIR..."
+	hdiutil attach "$SOURCE/Contents/SharedSupport/InstallESD.dmg" -noverify -nobrowse -mountpoint "$WORK_DIR/install_app"
+	hdiutil create -o "$WORK_DIR/$OS_NAME.cdr" -size 7316m -layout SPUD -fs HFS+J
+	hdiutil attach "$WORK_DIR/$OS_NAME.cdr.dmg" -noverify -nobrowse -mountpoint "$WORK_DIR/install_build"
+	asr restore -source "$WORK_DIR/install_app/BaseSystem.dmg" -target "$WORK_DIR/install_build" -noprompt -noverify -erase
+	while [ ! -d "/Volumes/OS X Base System/" ]
+	do
+		print -Y "Waiting for OS X Base System to mount, sleeping for 3 seconds..."
+		sleep 3
+	done
+	rm -f$VERBOSE /Volumes/OS\ X\ Base\ System/System/Installation/Packages
+	cp -rp$VERBOSE "$WORK_DIR/install_app/Packages" /Volumes/OS\ X\ Base\ System/System/Installation/
+	cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.chunklist" /Volumes/OS\ X\ Base\ System/BaseSystem.chunklist
+	cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.dmg" /Volumes/OS\ X\ Base\ System/BaseSystem.dmg
+	hdiutil detach "$WORK_DIR/install_app"
+	hdiutil detach /Volumes/OS\ X\ Base\ System/
+	hdiutil convert "$WORK_DIR/$OS_NAME.cdr.dmg" -format UDTO -o "$WORK_DIR/$OS_NAME.iso"
+	mv -f$VERBOSE "$WORK_DIR/$OS_NAME.iso.cdr" "$WORK_DIR/$OS_NAME.iso"
+	rm -f$VERBOSE "$WORK_DIR/$OS_NAME.cdr.dmg"
+	if [ $? -eq 0 ];then
+		print -G "Your ISO is ready for deployment at $WORK_DIR/$OS_NAME.iso"
+	else
+		print -R "Something appears to have gone wrong."
+	fi
+}
+usage()
+{
+	echo ""
+	echo "	Usage for $0:"
+	echo "	Optional Flags:"
+	echo "		-h: Display this dialog"
+	echo "		-c: Create flag to initiate ISO creation."
+	echo "		-d: Enable Debugging."
+	echo "	Required Flags:"
+	echo "		-s absolute_path: Source file absolute path."
+	echo ""
+}
+
+#### Main Run ####
+if [ "$(uname -s)" != "Darwin" ];then
+	print -R "Need to run this on a Mac!"
+	exit 1
+fi
+if [ $# -lt 1 ]; then
+	print -R "Missing arguments"
+	usage
+	exit 1
+else
+	while getopts "hs:cd" opt
+	do
+		case "$opt" in
+			"h")
+				usage
+				;;
+			"s")
+				SOURCE="$OPTARG"
+				;;
+			"c")
+				CREATE=1
+				;;
+			"d")
+				DEBUG=1
+				VERBOSE="v"
+				;;
+			"*")
+				print -R "Unrecognized Argument: $opt"
+				usage
+				exit 1
+				;;
+		esac
+	done
+fi
+if [ $DEBUG -eq 1 ]; then
+	print -B "DEBUG: $DEBUG"
+	print -B "SOURCE: $SOURCE"
+	print -B "CREATE: $CREATE"
+	check_source "$SOURCE"
+	print -B "OS_NAME: $OS_NAME"
+fi
+if [ $CREATE -eq 1 ];then
+	check_source "$SOURCE"
+	print -G "Starting Creation process for $SOURCE"
+	create
+fi
+exit 0
