@@ -1,11 +1,15 @@
 #!/bin/bash
-
+trap detach_all_volumes 0 1 2 3 6 9 14 15
 #### Global Variables ####
 DEBUG=0
 VERBOSE=""
 CREATE=0
 OS_NAME=""
+OS_VERSION=""
 SOURCE=""
+CREATEINSTALLMEDIA_LOC=""
+WORK_DIR="/tmp/$0-$(date +%s)"
+vols=("$WORK_DIR/install_build" "$WORK_DIR/install_app" "/Volumes/OS X Base System/")
 #### Functions ####
 print()
 {
@@ -20,7 +24,7 @@ print()
 		Cyan='\033[0;36m'         # Cyan
 		White='\033[0;37m'        # White
 		NC='\033[m'               # Color Reset
-	else 
+	else
 		Black='\e[0;30m'        # Black
 		Red='\e[0;31m'          # Red
 		Green='\e[0;32m'        # Green
@@ -70,7 +74,7 @@ print()
 	done
 	if [[ "$STRING" == " " ]];then
 		shift "$((OPTIND - 1))"
-		STRING="$@" 
+		STRING="$@"
 	fi
 	if [ $DEBUG -eq 1 ]; then
 		echo "FGND: $FGND"
@@ -78,7 +82,7 @@ print()
 		echo "PNL: $PNL"
 		echo "STRING: $STRING"
 	fi
-	while [ $PNL -ne 0 ] 
+	while [ $PNL -ne 0 ]
 	do
 		printf "\n"
 		((PNL--))
@@ -89,64 +93,136 @@ print()
 }
 check_source()
 {
-	if [ $# -lt 1 ];then
-		print -R "No source argument detected."
-		exit 1
-	elif [ $DEBUG -eq 1 ];then
-		print -B "Accepted source arugment: $1"
+	[ $DEBUG -eq 1 ] && print -B "Checking source: $SOURCE"
+	[ ! -d "$SOURCE" ] && print -R "Could not find source at $SOURCE" && exit 1
+	[ $DEBUG -eq 1 ] && print -B "Found source at $SOURCE"
+	if [[ "${SOURCE: -1}" == "/" ]];then
+		REVERSED="$(echo $SOURCE | rev)"
+		SOURCE="$(echo ${REVERSED: -$(expr $(echo $REVERSED | wc -c) - 2)} | rev)"
 	fi
-	if [ ! -d "$1" ];then
-		print -R "Could not find source at $1"
-		exit 1
-	elif [ $DEBUG -eq 1 ];then
-		print -B "Found source at $1"
-	fi
-	FILE="$(echo "$1" | rev | cut -d"/" -f1 | rev)"
-	if [[ ! "$FILE" == *".app" ]];then
-		print -R "Not a valid .app source file: $FILE"
-		exit 1
-	elif [ $DEBUG -eq 1 ]; then
-		print -B "Found a valid .app source file: $FILE"
-	fi
-	OS_NAME="$(echo ${FILE%.*} | sed -e "s/Install OS X //g" -e "s/Install macOS //g")"
-	while [ -z "$OS_NAME" ]
-	do
-		print -R "Could not parse OS name ($OS_NAME)"
-		print -R -n "Please enter a name: "
-		read OS_NAME
-		print ""
-	done
+	FILE="$(echo "$SOURCE" | rev | cut -d"/" -f1 | rev)"
+	[[ ! "$FILE" == *".app" ]] && print -R "Not a valid .app source file: $FILE" && exit 1
+	[ $DEBUG -eq 1 ] && print -B "Found a valid .app source file: $FILE"
 }
 
+process_source()
+{
+	if [ ! -d "$WORK_DIR" ];then
+		mkdir -p$VERBOSE "$WORK_DIR"
+	fi
+	mkdir -p$VERBOSE "$WORK_DIR/base_system"
+	mkdir -p$VERBOSE "$WORK_DIR/install_esd"
+	cd "$WORK_DIR"
+	OIFS="$IFS"
+	IFS=$'\n'
+	INSTALLESD_LOC="$(/usr/bin/find $SOURCE -type f -name InstallESD.dmg -xdev)"
+	BASESYSTEM_LOC="$(/usr/bin/find $SOURCE -type f -name BaseSystem.dmg -xdev)"
+	CREATEINSTALLMEDIA_LOC="$(/usr/bin/find $SOURCE -type f -name createinstallmedia -xdev)"
+	[ ! -f "$CREATEINSTALLMEDIA_LOC" ] && print -R "Missing createinstallmedia binary" && exit 1
+	[ ! -f "$INSTALLESD_LOC" ] && print -R "Missing InstallESD.dmg" && exit 1
+	if [ ! -f "$BASESYSTEM_LOC" ];then
+		[ $DEBUG -eq 1 ] && print -B "BaseSystem.dmg not found, searching inside InstallESD.dmg"
+		attach "$INSTALLESD_LOC" "$WORK_DIR/install_esd"
+		BASESYSTEM_LOC="$(/usr/bin/find $WORK_DIR/install_esd -type f -name BaseSystem.dmg -xdev)"
+		[ ! -f "$BASESYSTEM_LOC" ] && print -R "Missing BaseSystem.dmg" && exit 1
+	fi
+	attach "$BASESYSTEM_LOC" "$WORK_DIR/base_system"
+	IFS="$OIFS"
+	OS_VERSION="$(/usr/bin/defaults read $WORK_DIR/base_system/System/Library/CoreServices/SystemVersion.plist ProductVersion)"
+	case "$(echo $OS_VERSION | cut -d . -f2)" in
+		"13") OS_NAME="High_Sierra";;
+		"12") OS_NAME="Sierra";;
+		"11") OS_NAME="El_Capitan";;
+		"10") OS_NAME="Yosemite";;
+		"9") OS_NAME="Mavericks";;
+		*)
+			print -Y "Unrecognized OS_VERSION: $OS_VERSION"
+			OS_NAME="Unknown"
+			;;
+	esac
+	if [ $DEBUG -eq 1 ]; then
+		print -B "INSTALLESD_LOC: $INSTALLESD_LOC"
+		print -B "BASESYSTEM_LOC: $BASESYSTEM_LOC"
+		print -B "CREATEINSTALLMEDIA_LOC: $CREATEINSTALLMEDIA_LOC"
+		print -B "OS_NAME: $OS_NAME"
+		print -B "OS_VERSION: $OS_VERSION"
+	fi
+
+	/usr/bin/hdiutil detach "$WORK_DIR/base_system"
+	/usr/bin/hdiutil detach "$WORK_DIR/install_esd"
+}
+
+attach()
+{
+	[ $# -lt 2 ] && print -R "Missing Variables in attach function." && exit 1
+	[ ! -f $1 ] && print -R "Missing $1" && exit 1
+	[ ! -d $2 ] && print -R "Missing mountpoint directory: $2" && exit 1
+	/usr/bin/hdiutil attach "$1" -noverify -nobrowse -mountpoint "$2"
+	OIFS="$IFS"
+	IFS=$'\n'
+	vols=( ${vols[@]} "$2" )
+	IFS="$OIFS"
+	[ $? -ne 0 ] && print -R "Issue with attaching $1 to $2" && exit 1
+}
+detach_all_volumes()
+{
+	OIFS="$IFS"
+	IFS=$'\n'
+	vols=( ${vols[@]} $(/usr/bin/find /Volumes/ -type d -iname *"Install"* -d 1 -xdev) )
+	IFS="$OIFS"
+	for v in "${vols[@]}"
+	do
+		[ $DEBUG -eq 1 ] && print -B "Attempt detach of $v"
+		/usr/bin/hdiutil detach "$v"
+	done
+}
 create()
 {
-	WORK_DIR="/tmp/$0-$(date +%s)"
-	mkdir -p$VERBOSE "$WORK_DIR"
-	cd "$WORK_DIR"
-	print -B "Working out of $WORK_DIR..."
-	hdiutil attach "$SOURCE/Contents/SharedSupport/InstallESD.dmg" -noverify -nobrowse -mountpoint "$WORK_DIR/install_app"
-	hdiutil create -o "$WORK_DIR/$OS_NAME.cdr" -size 7316m -layout SPUD -fs HFS+J
-	hdiutil attach "$WORK_DIR/$OS_NAME.cdr.dmg" -noverify -nobrowse -mountpoint "$WORK_DIR/install_build"
-	asr restore -source "$WORK_DIR/install_app/BaseSystem.dmg" -target "$WORK_DIR/install_build" -noprompt -noverify -erase
-	while [ ! -d "/Volumes/OS X Base System/" ]
-	do
-		print -Y "Waiting for OS X Base System to mount, sleeping for 3 seconds..."
-		sleep 3
-	done
-	rm -f$VERBOSE /Volumes/OS\ X\ Base\ System/System/Installation/Packages
-	cp -rp$VERBOSE "$WORK_DIR/install_app/Packages" /Volumes/OS\ X\ Base\ System/System/Installation/
-	cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.chunklist" /Volumes/OS\ X\ Base\ System/BaseSystem.chunklist
-	cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.dmg" /Volumes/OS\ X\ Base\ System/BaseSystem.dmg
-	hdiutil detach "$WORK_DIR/install_app"
-	hdiutil detach /Volumes/OS\ X\ Base\ System/
-	hdiutil convert "$WORK_DIR/$OS_NAME.cdr.dmg" -format UDTO -o "$WORK_DIR/$OS_NAME.iso"
-	mv -f$VERBOSE "$WORK_DIR/$OS_NAME.iso.cdr" "$WORK_DIR/$OS_NAME.iso"
-	rm -f$VERBOSE "$WORK_DIR/$OS_NAME.cdr.dmg"
-	if [ $? -eq 0 ];then
-		print -G "Your ISO is ready for deployment at $WORK_DIR/$OS_NAME.iso"
-	else
-		print -R "Something appears to have gone wrong."
+	print -G "Starting Creation process for $SOURCE"
+	if [ ! -d "$WORK_DIR" ];then
+		mkdir -p$VERBOSE "$WORK_DIR"
 	fi
+	mkdir -p$VERBOSE "$WORK_DIR/install_build"
+	mkdir -p$VERBOSE "$WORK_DIR/install_app"
+	cd "$WORK_DIR"
+	TARGET_NAME="$OS_NAME""_""$OS_VERSION"
+	/usr/bin/hdiutil create -o "$WORK_DIR/$TARGET_NAME.cdr" -size 12g -layout SPUD -fs HFS+J
+	attach "$WORK_DIR/$TARGET_NAME.cdr.dmg" "$WORK_DIR/install_build"
+	case "$(echo $OS_VERSION | cut -d . -f2)" in
+		"13")
+			"$CREATEINSTALLMEDIA_LOC" --volume "$WORK_DIR/install_build" --nointeraction
+			;;
+		"12" | "11" | "10" | "9")
+			attach "$INSTALLESD_LOC" "$WORK_DIR/install_app"
+			asr restore -source "$WORK_DIR/install_app/BaseSystem.dmg" -target "$WORK_DIR/install_build" -noprompt -noverify -erase
+			loop_count=1
+			while [ ! -d "/Volumes/OS X Base System/" ]
+			do
+				sleep_count=3
+				(( sleep_count = loop_count * sleep_count ))
+				print -Y "Waiting for OS X Base System to mount, sleeping for $sleep_count seconds..."
+				sleep $sleep_count
+				((loop_count++))
+				[ $loop_count -gt 3 ] && print -R "Timeout while waiting for OS X Base System to mount." && exit 1
+			done
+			rm -f$VERBOSE /Volumes/OS\ X\ Base\ System/System/Installation/Packages
+			cp -rp$VERBOSE "$WORK_DIR/install_app/Packages" /Volumes/OS\ X\ Base\ System/System/Installation/
+			cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.chunklist" /Volumes/OS\ X\ Base\ System/BaseSystem.chunklist
+			cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.dmg" /Volumes/OS\ X\ Base\ System/BaseSystem.dmg
+			;;
+		*)
+			print -R "Unsupported OS_VERSION: $OS_VERSION"
+			exit 1
+			;;
+	esac
+	[ $? -ne 0 ] && print -R "Creation failed. See above for errors." && exit 1
+	detach_all_volumes
+	/usr/bin/hdiutil convert "$WORK_DIR/$TARGET_NAME.cdr.dmg" -format UDTO -o "$WORK_DIR/$TARGET_NAME.iso"
+	[ $? -ne 0 ] && print -R "Conversion failed. See above for errors." && exit 1
+	mv -f$VERBOSE "$WORK_DIR/$TARGET_NAME.iso.cdr" "$WORK_DIR/$TARGET_NAME.iso"
+	rm -f$VERBOSE "$WORK_DIR/$TARGET_NAME.cdr.dmg"
+	print -G "Your ISO is ready for deployment at $WORK_DIR/$TARGET_NAME.iso"
+	/usr/bin/open "$WORK_DIR"
 }
 usage()
 {
@@ -195,16 +271,20 @@ else
 		esac
 	done
 fi
+if [ $CREATE -eq 1 ];then
+	check_source
+	process_source
+	create
+	exit 0
+fi
 if [ $DEBUG -eq 1 ]; then
+	check_source
+	process_source
 	print -B "DEBUG: $DEBUG"
 	print -B "SOURCE: $SOURCE"
 	print -B "CREATE: $CREATE"
-	check_source "$SOURCE"
 	print -B "OS_NAME: $OS_NAME"
+	print -B "OS_VERSION: $OS_VERSION"
+	detach_all_volumes
+	rm -rfv "$WORK_DIR"
 fi
-if [ $CREATE -eq 1 ];then
-	check_source "$SOURCE"
-	print -G "Starting Creation process for $SOURCE"
-	create
-fi
-exit 0
