@@ -1,5 +1,11 @@
 ## macOS (OS X) ISO Creator ##
 Create bootable ISO images of macOS or OS X from .app installers.
+## Support for the following OS ##
++ 10.9
++ 10.10
++ 10.11
++ 10.12
++ 10.13
 ## Options ##
 	Optional Flags:
 		-h: Display this dialog
