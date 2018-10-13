@@ -130,6 +130,7 @@ process_source()
 	IFS="$OIFS"
 	OS_VERSION="$(/usr/bin/defaults read $WORK_DIR/base_system/System/Library/CoreServices/SystemVersion.plist ProductVersion)"
 	case "$(echo $OS_VERSION | cut -d . -f2)" in
+		"14") OS_NAME="Mojave";;
 		"13") OS_NAME="High_Sierra";;
 		"12") OS_NAME="Sierra";;
 		"11") OS_NAME="El_Capitan";;
@@ -189,7 +190,7 @@ create()
 	/usr/bin/hdiutil create -o "$WORK_DIR/$TARGET_NAME.cdr" -size 12g -layout SPUD -fs HFS+J
 	attach "$WORK_DIR/$TARGET_NAME.cdr.dmg" "$WORK_DIR/install_build"
 	case "$(echo $OS_VERSION | cut -d . -f2)" in
-		"13")
+		"13" | "14")
 			"$CREATEINSTALLMEDIA_LOC" --volume "$WORK_DIR/install_build" --nointeraction
 			;;
 		"12" | "11" | "10" | "9")
