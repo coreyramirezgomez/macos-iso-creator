@@ -190,7 +190,7 @@ create()
 	/usr/bin/hdiutil create -o "$WORK_DIR/$TARGET_NAME.cdr" -size 12g -layout SPUD -fs HFS+J
 	attach "$WORK_DIR/$TARGET_NAME.cdr.dmg" "$WORK_DIR/install_build"
 	case "$(echo $OS_VERSION | cut -d . -f2)" in
-		"13" | "14")
+		"13" | "14" | "15")
 			"$CREATEINSTALLMEDIA_LOC" --volume "$WORK_DIR/install_build" --nointeraction
 			;;
 		"12" | "11" | "10" | "9")
