@@ -1,291 +1,307 @@
 #!/bin/bash
-trap detach_all_volumes 0 1 2 3 6 9 14 15
-#### Global Variables ####
-DEBUG=0
-VERBOSE=""
-CREATE=0
+set -eu
+## Variables Filled by CLI
+SOURCE=""
+ACTION=""
+## Variables filled during operations
 OS_NAME=""
 OS_VERSION=""
-SOURCE=""
+OS_MAJOR_VERSION=""
 CREATEINSTALLMEDIA_LOC=""
-WORK_DIR="/tmp/$0-$(date +%s)"
-vols=("$WORK_DIR/install_build" "$WORK_DIR/install_app" "/Volumes/OS X Base System/")
+BASESYSTEM_LOC=""
+INSTALLESD_LOC=""
+ATTACHED_MOUNTS=()
+WORK_DIR=""
+## Command variables
+ASR="$(command -v asr)"
+DEFAULTS="$(command -v defaults)"
+FIND="$(command -v find)"
+HDIUTIL="$(command -v hdiutil)"
 #### Functions ####
-print()
+function print()
 {
-	local OPTIND
-	if [ "$(uname -s)" == "Darwin" ];then
-		Black='\033[0;30m'        # Black
-		Red='\033[0;31m'          # Red
-		Green='\033[0;32m'        # Green
-		Yellow='\033[0;33m'       # Yellow
-		Blue='\033[0;34m'         # Blue
-		Purple='\033[0;35m'       # Purple
-		Cyan='\033[0;36m'         # Cyan
-		White='\033[0;37m'        # White
-		NC='\033[m'               # Color Reset
-	else
-		Black='\e[0;30m'        # Black
-		Red='\e[0;31m'          # Red
-		Green='\e[0;32m'        # Green
-		Yellow='\e[0;33m'       # Yellow
-		Blue='\e[0;34m'         # Blue
-		Purple='\e[0;35m'       # Purple
-		Cyan='\e[0;36m'         # Cyan
-		White='\e[0;37m'        # White
-		NC="\e[m"               # Color Reset
-	fi
-	colors=( "$Red" "$Green" "$Gellow" "$Blue" "$Purple" "$Cyan" )
-	local DEBUG=0
-	FGND=""
-	NL=1
-	PNL=0
-	STRING=" "
-	while getopts "f:npKRGYBPCWS:" opt
-	do
-		case "$opt" in
-			"f")					# Set foreground/text color.
-				case "$OPTARG" in
-					"black") FGND="$Black";;
-					"red") FGND="$Red";;
-					"green") FGND="$Green";;
-					"yellow") FGND="$Yellow";;
-					"blue") FGND="$Blue";;
-					"purple") FGND="$Purple";;
-					"cyan") FGND="$Cyan";;
-					"white") FGND="$White";;
-					"*") [ $DEBUG -eq 1 ] && echo "Unrecognized Arguement: $OPTARG" ;;
-				esac
-				;;
-			"n") NL=0 ;;	 			# Print with newline.
-			"p") ((PNL++)) ;; 			# Prepend with newline.
-			"K") FGND="$Black";;
-			"R") FGND="$Red";;
-			"G") FGND="$Green";;
-			"Y") FGND="$Yellow";;
-			"B") FGND="$Blue";;
-			"P") FGND="$Purple";;
-			"C") FGND="$Cyan";;
-			"W") FGND="$White";;
-			"D") local DEBUG=1 ;;
-			"S") STRING="$OPTARG" ;;
-			"*") [ $DEBUG -eq 1 ] && echo "Unknown Arguement: $opt" ;;
-		esac
-	done
-	if [[ "$STRING" == " " ]];then
-		shift "$((OPTIND - 1))"
-		STRING="$@"
-	fi
-	if [ $DEBUG -eq 1 ]; then
-		echo "FGND: $FGND"
-		echo "NL: $NL"
-		echo "PNL: $PNL"
-		echo "STRING: $STRING"
-	fi
-	while [ $PNL -ne 0 ]
-	do
-		printf "\n"
-		((PNL--))
-	done
-	[ ! -z $FGND ] && STRING="$FGND$STRING$NC"
-	printf -- "$STRING"
-	[ $NL -eq 1 ] && printf "\n"
-}
-check_source()
-{
-	[ $DEBUG -eq 1 ] && print -B "Checking source: $SOURCE"
-	[ ! -d "$SOURCE" ] && print -R "Could not find source at $SOURCE" && exit 1
-	[ $DEBUG -eq 1 ] && print -B "Found source at $SOURCE"
-	if [[ "${SOURCE: -1}" == "/" ]];then
-		REVERSED="$(echo $SOURCE | rev)"
-		SOURCE="$(echo ${REVERSED: -$(expr $(echo $REVERSED | wc -c) - 2)} | rev)"
-	fi
-	FILE="$(echo "$SOURCE" | rev | cut -d"/" -f1 | rev)"
-	[[ ! "$FILE" == *".app" ]] && print -R "Not a valid .app source file: $FILE" && exit 1
-	[ $DEBUG -eq 1 ] && print -B "Found a valid .app source file: $FILE"
+    local OPTIND
+    Black='\033[0;30m'        # Black
+    Red='\033[0;31m'          # Red
+    Green='\033[0;32m'        # Green
+    Yellow='\033[0;33m'       # Yellow
+    Blue='\033[0;34m'         # Blue
+    Purple='\033[0;35m'       # Purple
+    Cyan='\033[0;36m'         # Cyan
+    White='\033[0;37m'        # White
+    NC='\033[m'               # Color Reset
+    FGND=""
+    NL=1    # Force newline
+    PNL=0
+    STRING=" "
+    while getopts "f:npKRGYBPCWS:" opt
+    do
+        case "$opt" in
+            "f")    # Set foreground/text color.
+                case "$OPTARG" in
+                    "black") FGND="$Black";;
+                    "red") FGND="$Red";;
+                    "green") FGND="$Green";;
+                    "yellow") FGND="$Yellow";;
+                    "blue") FGND="$Blue";;
+                    "purple") FGND="$Purple";;
+                    "cyan") FGND="$Cyan";;
+                    "white") FGND="$White";;
+                    *) echo "Unrecognized Arguement: $OPTARG" >&2 ;;
+                esac
+                ;;
+            "n") NL=0 ;;            # Print without newline.
+            "p") ((PNL++)) ;;       # Prepend with newline.
+            "K") FGND="$Black";;
+            "R") FGND="$Red";;
+            "G") FGND="$Green";;
+            "Y") FGND="$Yellow";;
+            "B") FGND="$Blue";;
+            "P") FGND="$Purple";;
+            "C") FGND="$Cyan";;
+            "W") FGND="$White";;
+            "S") STRING="$OPTARG" ;;
+            *) echo "Unknown Arguement: $opt" >&2 ;;
+        esac
+    done
+    if [[ "${STRING}" == " " ]];then
+        shift "$((OPTIND - 1))"
+        STRING="$*"
+    fi
+    [ -n "${FGND}" ] && STRING="${FGND}${STRING}${NC}"
+    while [ ${PNL} -ne 0 ]
+    do
+        STRING="\n${STRING}"
+        ((PNL--))
+    done
+    [ $NL -eq 1 ] && STRING="${STRING}\n"
+    echo -n -e "${STRING}" >&2 # Send all output to stderr
 }
 
-process_source()
+function find_file()
 {
-	if [ ! -d "$WORK_DIR" ];then
-		mkdir -p$VERBOSE "$WORK_DIR"
-	fi
-	mkdir -p$VERBOSE "$WORK_DIR/base_system"
-	mkdir -p$VERBOSE "$WORK_DIR/install_esd"
-	cd "$WORK_DIR"
-	OIFS="$IFS"
-	IFS=$'\n'
-	INSTALLESD_LOC="$(/usr/bin/find $SOURCE -type f -name InstallESD.dmg -xdev)"
-	BASESYSTEM_LOC="$(/usr/bin/find $SOURCE -type f -name BaseSystem.dmg -xdev)"
-	CREATEINSTALLMEDIA_LOC="$(/usr/bin/find $SOURCE -type f -name createinstallmedia -xdev)"
-	[ ! -f "$CREATEINSTALLMEDIA_LOC" ] && print -R "Missing createinstallmedia binary" && exit 1
-	[ ! -f "$INSTALLESD_LOC" ] && print -R "Missing InstallESD.dmg" && exit 1
-	if [ ! -f "$BASESYSTEM_LOC" ];then
-		[ $DEBUG -eq 1 ] && print -B "BaseSystem.dmg not found, searching inside InstallESD.dmg"
-		attach "$INSTALLESD_LOC" "$WORK_DIR/install_esd"
-		BASESYSTEM_LOC="$(/usr/bin/find $WORK_DIR/install_esd -type f -name BaseSystem.dmg -xdev)"
-		[ ! -f "$BASESYSTEM_LOC" ] && print -R "Missing BaseSystem.dmg" && exit 1
-	fi
-	attach "$BASESYSTEM_LOC" "$WORK_DIR/base_system"
-	IFS="$OIFS"
-	OS_VERSION="$(/usr/bin/defaults read $WORK_DIR/base_system/System/Library/CoreServices/SystemVersion.plist ProductVersion)"
-	case "$(echo $OS_VERSION | cut -d . -f2)" in
-		"14") OS_NAME="Mojave";;
-		"13") OS_NAME="High_Sierra";;
-		"12") OS_NAME="Sierra";;
-		"11") OS_NAME="El_Capitan";;
-		"10") OS_NAME="Yosemite";;
-		"9") OS_NAME="Mavericks";;
-		*)
-			print -Y "Unrecognized OS_VERSION: $OS_VERSION"
-			OS_NAME="Unknown"
-			;;
-	esac
-	if [ $DEBUG -eq 1 ]; then
-		print -B "INSTALLESD_LOC: $INSTALLESD_LOC"
-		print -B "BASESYSTEM_LOC: $BASESYSTEM_LOC"
-		print -B "CREATEINSTALLMEDIA_LOC: $CREATEINSTALLMEDIA_LOC"
-		print -B "OS_NAME: $OS_NAME"
-		print -B "OS_VERSION: $OS_VERSION"
-	fi
+    trap 'find_file: parameter errors: ($#) $* && exit 1' ERR
+    [ $# -eq 2 ]
+    test -n "${1}"
+    [ -d "${1}" ]
+    test -n "${2}"
+    trap - ERR
 
-	/usr/bin/hdiutil detach "$WORK_DIR/base_system"
-	/usr/bin/hdiutil detach "$WORK_DIR/install_esd"
+    count=$("${FIND}" "${1}" -type f -name "${2}" -xdev | wc -l)
+    if [ ${count} -gt 1 ]; then
+        print -R "Found > 1 results for ${2} in ${1}"
+        echo ""
+        return 1
+    fi
+    if [ ${count} -eq 0 ]; then
+        print -R "No results found for $2 in $1"
+        echo ""
+        return 1
+    fi
+    "${FIND}" "${1}" -type f -name "${2}" -xdev
 }
 
-attach()
+function parse_os_version()
 {
-	[ $# -lt 2 ] && print -R "Missing Variables in attach function." && exit 1
-	[ ! -f $1 ] && print -R "Missing $1" && exit 1
-	[ ! -d $2 ] && print -R "Missing mountpoint directory: $2" && exit 1
-	/usr/bin/hdiutil attach "$1" -noverify -nobrowse -mountpoint "$2"
-	OIFS="$IFS"
-	IFS=$'\n'
-	vols=( ${vols[@]} "$2" )
-	IFS="$OIFS"
-	[ $? -ne 0 ] && print -R "Issue with attaching $1 to $2" && exit 1
+    OS_MAJOR_VERSION="$(echo ${1} | cut -d . -f1)"
+    OS_MINOR_VERSION="$(echo ${1} | cut -d . -f2)"
+    if [ "${OS_MAJOR_VERSION}" -eq 10 ]; then
+        case "${OS_MINOR_VERSION}" in
+            "15") OS_NAME="Catalina" ;;
+            "14") OS_NAME="Mojave" ;;
+            "13") OS_NAME="High_Sierra" ;;
+            "12") OS_NAME="Sierra" ;;
+            "11") OS_NAME="El_Capitan";;
+            "10") OS_NAME="Yosemite" ;;
+            "9") OS_NAME="Mavericks" ;;
+            *)
+                print -Y "Unrecognized OS_MINOR_VERSION: ${OS_MINOR_VERSION}"
+                OS_NAME="Unknown"
+                return 1
+                ;;
+        esac
+    elif [ "${OS_MAJOR_VERSION}" -eq 11 ]; then
+        OS_NAME="Big_Sur"
+    elif [ "${OS_MAJOR_VERSION}" -eq 12 ]; then
+        OS_NAME="Monterey"
+    elif [ "${OS_MAJOR_VERSION}" -eq 13 ]; then
+        OS_NAME="Ventura"
+    else
+        print -Y "Unrecognized OS_MAJOR_VERSION: ${OS_MAJOR_VERSION}"
+        OS_NAME="Unknown"
+        return 1
+    fi
 }
-detach_all_volumes()
+
+function process_source()
 {
-	OIFS="$IFS"
-	IFS=$'\n'
-	vols=( ${vols[@]} $(/usr/bin/find /Volumes/ -type d -iname *"Install"* -d 1 -xdev) )
-	IFS="$OIFS"
-	for v in "${vols[@]}"
-	do
-		[ $DEBUG -eq 1 ] && print -B "Attempt detach of $v"
-		/usr/bin/hdiutil detach "$v"
-	done
+    mkdir -pv "${WORK_DIR}/base_system"
+    mkdir -pv "${WORK_DIR}/install_esd"
+    INSTALLESD_LOC=$(find_file "${SOURCE}" "InstallESD.dmg")
+    if ! find_file "${SOURCE}" "BaseSystem.dmg"; then
+        print -Y "BaseSystem.dmg not found, searching inside InstallESD.dmg"
+        attach "${INSTALLESD_LOC}" "${WORK_DIR}/install_esd"
+        BASESYSTEM_LOC=$(find_file "${WORK_DIR}/install_esd"  "BaseSystem.dmg")
+    else
+        BASESYSTEM_LOC=$(find_file "${SOURCE}" "BaseSystem.dmg")
+    fi
+    attach "${BASESYSTEM_LOC}" "${WORK_DIR}/base_system"
+    OS_VERSION=$(${DEFAULTS} read "${WORK_DIR}/base_system/System/Library/CoreServices/SystemVersion.plist" "ProductVersion")
+    parse_os_version "${OS_VERSION}"
+    print -B "INSTALLESD_LOC: ${INSTALLESD_LOC}"
+    print -B "BASESYSTEM_LOC: ${BASESYSTEM_LOC}"
+    print -B "OS_NAME: ${OS_NAME}"
+    print -B "OS_VERSION: ${OS_VERSION}"
+
+    detach_mounts
 }
-create()
+
+function attach()
 {
-	print -G "Starting Creation process for $SOURCE"
-	if [ ! -d "$WORK_DIR" ];then
-		mkdir -p$VERBOSE "$WORK_DIR"
-	fi
-	mkdir -p$VERBOSE "$WORK_DIR/install_build"
-	mkdir -p$VERBOSE "$WORK_DIR/install_app"
-	cd "$WORK_DIR"
-	TARGET_NAME="$OS_NAME""_""$OS_VERSION"
-	/usr/bin/hdiutil create -o "$WORK_DIR/$TARGET_NAME.cdr" -size 12g -layout SPUD -fs HFS+J
-	attach "$WORK_DIR/$TARGET_NAME.cdr.dmg" "$WORK_DIR/install_build"
-	case "$(echo $OS_VERSION | cut -d . -f2)" in
-		"13" | "14" | "15")
-			"$CREATEINSTALLMEDIA_LOC" --volume "$WORK_DIR/install_build" --nointeraction
-			;;
-		"12" | "11" | "10" | "9")
-			attach "$INSTALLESD_LOC" "$WORK_DIR/install_app"
-			asr restore -source "$WORK_DIR/install_app/BaseSystem.dmg" -target "$WORK_DIR/install_build" -noprompt -noverify -erase
-			loop_count=1
-			while [ ! -d "/Volumes/OS X Base System/" ]
-			do
-				sleep_count=3
-				(( sleep_count = loop_count * sleep_count ))
-				print -Y "Waiting for OS X Base System to mount, sleeping for $sleep_count seconds..."
-				sleep $sleep_count
-				((loop_count++))
-				[ $loop_count -gt 3 ] && print -R "Timeout while waiting for OS X Base System to mount." && exit 1
-			done
-			rm -f$VERBOSE /Volumes/OS\ X\ Base\ System/System/Installation/Packages
-			cp -rp$VERBOSE "$WORK_DIR/install_app/Packages" /Volumes/OS\ X\ Base\ System/System/Installation/
-			cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.chunklist" /Volumes/OS\ X\ Base\ System/BaseSystem.chunklist
-			cp -rp$VERBOSE "$WORK_DIR/install_app/BaseSystem.dmg" /Volumes/OS\ X\ Base\ System/BaseSystem.dmg
-			;;
-		*)
-			print -R "Unsupported OS_VERSION: $OS_VERSION"
-			exit 1
-			;;
-	esac
-	[ $? -ne 0 ] && print -R "Creation failed. See above for errors." && exit 1
-	detach_all_volumes
-	/usr/bin/hdiutil convert "$WORK_DIR/$TARGET_NAME.cdr.dmg" -format UDTO -o "$WORK_DIR/$TARGET_NAME.iso"
-	[ $? -ne 0 ] && print -R "Conversion failed. See above for errors." && exit 1
-	mv -f$VERBOSE "$WORK_DIR/$TARGET_NAME.iso.cdr" "$WORK_DIR/$TARGET_NAME.iso"
-	rm -f$VERBOSE "$WORK_DIR/$TARGET_NAME.cdr.dmg"
-	print -G "Your ISO is ready for deployment at $WORK_DIR/$TARGET_NAME.iso"
-	/usr/bin/open "$WORK_DIR"
+    trap 'attach: parameter errors: ($#) $* && exit 1' ERR
+    [ $# -eq 2 ]
+    [ -f "${1}" ]
+    [ -d "${2}" ]
+    trap - ERR
+    if ! ${HDIUTIL} attach "${1}" -noverify -nobrowse -mountpoint "${2}"; then
+        print -R "Issue with attaching ${1} to ${2}"
+        return 1
+    else
+        ATTACHED_MOUNTS=( "${ATTACHED_MOUNTS[@]}" "${2}" )
+    fi
 }
-usage()
+function detach_mounts()
 {
-	echo ""
-	echo "	Usage for $0:"
-	echo "	Optional Flags:"
-	echo "		-h: Display this dialog"
-	echo "		-c: Create flag to initiate ISO creation."
-	echo "		-d: Enable Debugging."
-	echo "	Required Flags:"
-	echo "		-s absolute_path: Source file absolute path."
-	echo ""
+    [ ${#ATTACHED_MOUNTS[@]} -gt 0 ] && print -B "Attached Mounts (${#ATTACHED_MOUNTS[@]}): ${ATTACHED_MOUNTS[*]}"
+    still_attached=()
+    for M in "${ATTACHED_MOUNTS[@]}"
+    do
+        print -Y "Attempting detach: ${M}"
+        if ! "${HDIUTIL}" detach "${M}"; then
+            still_attached=( "${still_attached[@]}" "${M}" )
+        fi
+    done
+    ATTACHED_MOUNTS=( "${still_attached[@]}" )
+}
+function create()
+{
+    print -G "Starting Creation process for ${SOURCE}"
+    mkdir -p "${WORK_DIR}/install_build"
+    mkdir -p "${WORK_DIR}/install_app"
+    pushd "${WORK_DIR}" || exit 1
+    TARGET_NAME="${OS_NAME}""_""${OS_VERSION}"
+    "${HDIUTIL}" create -o "${WORK_DIR}/${TARGET_NAME}.cdr" -size 12g -layout SPUD -fs HFS+J
+    attach "${WORK_DIR}/$TARGET_NAME.cdr.dmg" "${WORK_DIR}/install_build"
+
+    case "${OS_MAJOR_VERSION}.${OS_MINOR_VERSION}" in
+        "12."* | "11."* | "10.15" | "10.14" | "10.13")
+            CREATEINSTALLMEDIA_LOC=$(find_file "${SOURCE}" "createinstallmedia")
+            "${CREATEINSTALLMEDIA_LOC}" --volume "${WORK_DIR}/install_build" --nointeraction
+            ;;
+        "10.12" | "10.11" | "10.10" | "10.9")
+            attach "${INSTALLESD_LOC}" "${WORK_DIR}/install_app"
+            "${ASR}" restore -source "${WORK_DIR}/install_app/BaseSystem.dmg" -target "${WORK_DIR}/install_build" -noprompt -noverify -erase
+            loop_count=1
+            BASE_SYSTEM_ROOT="/Volumes/OS X Base System"
+            while [ ! -d "${BASE_SYSTEM_ROOT}" ]
+            do
+                sleep_count=3
+                (( sleep_count = loop_count * sleep_count ))
+                print -Y "Waiting for OS X Base System to mount, sleeping for $sleep_count seconds..."
+                sleep $sleep_count
+                ((loop_count++))
+                [ ${loop_count} -gt 3 ] && print -R "Timeout while waiting for OS X Base System to mount." && exit 1
+            done
+            ATTACHED_MOUNTS=( "${ATTACHED_MOUNTS[@]}" "${WORK_DIR}/install_build" "${BASE_SYSTEM_ROOT}" )
+            rm -f "${BASE_SYSTEM_ROOT}/System/Installation/Packages"
+            rsync -vrPa "${WORK_DIR}/install_app/Packages" "${BASE_SYSTEM_ROOT}/System/Installation/"
+            rsync -vPa  "${WORK_DIR}/install_app/BaseSystem.chunklist" "${BASE_SYSTEM_ROOT}/BaseSystem.chunklist"
+            rsync -vPa  "${WORK_DIR}/install_app/BaseSystem.dmg" "${BASE_SYSTEM_ROOT}/BaseSystem.dmg"
+            ;;
+        *)
+            print -R "Unsupported OS_VERSION: $OS_VERSION"
+            exit 1
+            ;;
+    esac
+
+    if ! ${HDIUTIL} convert "${WORK_DIR}/${TARGET_NAME}.cdr.dmg" -format UDTO -o "${WORK_DIR}/${TARGET_NAME}.iso"; then
+        print -R "Conversion failed. See above for errors."
+        exit 1
+    fi
+    mv -f "${WORK_DIR}/${TARGET_NAME}.iso.cdr" "${WORK_DIR}/${TARGET_NAME}.iso"
+    rm -f "${WORK_DIR}/${TARGET_NAME}.cdr.dmg"
+    print -G "Your ISO is ready for deployment at ${WORK_DIR}/${TARGET_NAME}.iso"
+    /usr/bin/open "${WORK_DIR}"
+}
+function usage()
+{
+    cat << USAGE_EOF >&2
+macOS ISO Creator - ${0}
+    Rudimentry CLI for creating ISO for macOS.
+    Only works on macOS systems.
+    sudo required.
+Usage
+Optional Flags:
+    [-h|--help]
+        Display this dialog
+
+Required Flags:
+    [-s|--source] PATH
+        Specifiy the absolute path to source.
+    [inspect|create]
+        Choose an action.
+USAGE_EOF
 }
 
 #### Main Run ####
-if [ "$(uname -s)" != "Darwin" ];then
-	print -R "Need to run this on a Mac!"
-	exit 1
-fi
-if [ $# -lt 1 ]; then
-	print -R "Missing arguments"
-	usage
-	exit 1
-else
-	while getopts "hs:cd" opt
-	do
-		case "$opt" in
-			"h")
-				usage
-				;;
-			"s")
-				SOURCE="$OPTARG"
-				;;
-			"c")
-				CREATE=1
-				;;
-			"d")
-				DEBUG=1
-				VERBOSE="v"
-				;;
-			"*")
-				print -R "Unrecognized Argument: $opt"
-				usage
-				exit 1
-				;;
-		esac
-	done
-fi
-if [ $CREATE -eq 1 ];then
-	check_source
-	process_source
-	create
-	exit 0
-fi
-if [ $DEBUG -eq 1 ]; then
-	check_source
-	process_source
-	print -B "DEBUG: $DEBUG"
-	print -B "SOURCE: $SOURCE"
-	print -B "CREATE: $CREATE"
-	print -B "OS_NAME: $OS_NAME"
-	print -B "OS_VERSION: $OS_VERSION"
-	detach_all_volumes
-	rm -rfv "$WORK_DIR"
-fi
+trap usage ERR
+[ "$(uname -s)" == "Darwin" ]
+[ $# -gt 0 ]
+[ $(id -u) -eq 0 ]
+trap - ERR
+
+while [[ $# -gt 0 ]];
+do
+    case ${1} in
+        "-h" | "--help") usage && exit 0 ;;
+        "-s" | "--source") SOURCE="${2}" && shift ;;
+        "create" | "inspect" ) ACTION="${1}" ;;
+        *)
+            print -R "Unrecognized Argument: ${1}"
+            usage
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+trap usage ERR
+test -n "${HDIUTIL}"
+test -n "${FIND}"
+test -n "${ASR}"
+test -n "${DEFAULTS}"
+test -n "${SOURCE}"
+test -n "${ACTION}"
+[ -d "${SOURCE}" ]
+trap - ERR
+
+WORK_DIR="$(mktemp -d)"
+
+trap detach_mounts ERR
+case "${ACTION}" in
+    "inspect")
+        process_source
+        detach_mounts
+        ;;
+    "create")
+        process_source
+        create
+        detach_mounts
+        ;;
+    *)
+        print -R "Unknown action: ${ACTION}"
+        usage
+        exit 1
+        ;;
+    esac
+trap - ERR

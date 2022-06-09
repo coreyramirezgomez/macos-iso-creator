@@ -1,22 +1,31 @@
 ## macOS (OS X) ISO Creator ##
-Create bootable ISO images of macOS or OS X from .app installers.
+Create bootable ISO images of macOS or .app installers.
 ## Support for the following OS ##
 + 10.9
 + 10.10
 + 10.11
 + 10.12
 + 10.13
++ 10.15
++ 11 (untested)
++ 12 (untested)
++ 13 (untested)
 ## Options ##
-	Optional Flags:
-		-h: Display this dialog
-		-c: Create flag to initiate ISO creation.
-		-d: Enable Debugging.
-	Required Flags:
-		-s absolute_path: Source file absolute path.
+```
+Optional Flags:
+    [-h|--help]
+        Display this dialog
+```
+Required Flags:
+    [-s|--source] PATH
+        Specifiy the absolute path to source.
+    [inspect|create]
+        Choose an action.
+```
 ## Examples ##
 1. Create an installer from OS X Mavericks:
 
-`./macos-iso-creator -c -s "/Applications/Install OS X Mavericks.app"`
+`./macos-iso-creator -s "/Applications/Install OS X Mavericks.app" create`
 
 Output: 
 ```
