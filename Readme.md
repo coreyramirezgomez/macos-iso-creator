@@ -1,3 +1,6 @@
+# ⚠️ No longer maintained
+## Please use an alternative like https://github.com/ninxsoft/Mist 
+
 ## macOS (OS X) ISO Creator ##
 Create bootable ISO images of macOS or .app installers.
 ## Support for the following OS ##
